@@ -37,7 +37,6 @@ export const ADMIN_COMMANDS=[
   {command:'admin_stats',description:'Bot stats'},
 ];
 export function homeKeyboard(){return{inline_keyboard:[
-  [{text:'💬 Ask Llama',switch_inline_query_current_chat:''}],
   [{text:'🧠 Models',callback_data:'menu:models'},{text:'🔎 Web Search',callback_data:'menu:web'}],
   [{text:'🔊 Voice',callback_data:'menu:voice'},{text:'🧩 Memory',callback_data:'menu:memory'}],
   [{text:'🎁 Invite Friends',callback_data:'menu:invite'},{text:'⚙️ Settings',callback_data:'menu:settings'}],
