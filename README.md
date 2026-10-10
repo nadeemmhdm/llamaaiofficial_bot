@@ -1,119 +1,126 @@
 # Llama Telegram AI Bot
 
-**Llama v2.1.0** is a modern Telegram AI assistant developed by **Nadeem**. It runs on Cloudflare Workers and supports selectable AI modes, live web search, private personalization memory, voice input/output, stickers and emojis, contextual reactions, follow-up suggestions, and referral links.
+**Llama v2.2.0** is a personalized Telegram AI assistant developed by **Nadeem**. It runs on Cloudflare Workers with D1 persistence, live web search, voice input/output, private personalization memory, referrals, Free/Paid plans, Telegram Stars subscriptions, coupons, and Llama Coin rewards.
 
 Developer: https://github.com/nadeemmhdm
 
 ## Highlights
 
-- AI identity: **Llama**
-- `Llama Fast`, `Llama Smart`, and `Llama Reasoning` modes
-- Improved welcome, help, about, settings, model, web, voice, memory, and invite screens
-- Rich Telegram formatting: bold, italic, underline, strike, inline code, and code blocks
-- Safe rendering of `<`, `>`, and `&`
-- Thinking and web-search progress states
-- Live web search with source details hidden behind a **Sources** button
-- 2–4 contextual follow-up suggestions after responses
-- Telegram voice-note understanding
-- Optional **Text + Voice** reply mode
-- Sticker and emoji intent understanding
-- Context-aware Telegram reactions instead of one fixed reaction
-- Private per-user personalization memory
-- Personal referral links, invite counts, and invited-user views
-- Admin user search and referral leaderboard
-- Public GitHub activity lookup for developer/project questions
-- Versioned Worker home and health endpoints
-- D1 automatic read replication and Cloudflare global Worker execution
+- Llama birthday: **March 2, 2026**
+- First-time onboarding: preferred name, optional gender, optional DOB, and position
+- Personalized responses using profile fields and durable non-sensitive memory
+- Automatic birthday wishes at **00:00 Asia/Kolkata**
+- Free and Paid monthly plans
+- Free users use **Llama Fast** only
+- Paid unlocks Llama Smart, Llama Reasoning, higher monthly limits, and voice selection
+- Telegram Stars recurring subscription checkout: **99 XTR / 30 days**
+- Referral rewards with separate in-bot **Llama Coins**
+- 100 Llama Coins can redeem 7 Paid days
+- Coupon codes can grant Paid days and/or bonus Llama Coins with zero payment
+- Voice selection: Luna, Asteria, Orion, Athena, Arcas
+- Telegram voice-note understanding and optional Text + Voice replies
+- Web search with sources hidden behind a Sources button
+- 2–4 contextual suggested follow-up buttons
+- Sticker and emoji understanding from Telegram metadata
+- Context-aware Telegram message reactions
+- Public GitHub context for developer/project questions
+- Owner-only user search, subscription, coupon, coin, messaging and account controls
 
 ## Privacy model
 
-Llama **does not store full user conversations or AI answer bodies in D1**.
+Llama does **not** persist full user conversations or AI answers in D1.
 
-Persistent D1 data is limited to operational state such as:
+Persistent data is limited to operational/account data such as:
 
-- Telegram user/profile identifiers required for the bot to operate
-- selected model, web-search, and voice preferences
-- useful non-sensitive personalization memories explicitly inferred from user messages
-- referral metadata and invite counts
-- admin operational logs
-- short-lived response action metadata required by source/suggestion buttons
+- Telegram user/account identifiers required to deliver the bot
+- onboarding profile fields
+- selected plan/model/web/voice preferences
+- monthly usage counters
+- durable non-sensitive personalization memories
+- referral/invite relationships and Llama Coin ledger
+- coupon redemption metadata
+- Telegram Stars transaction identifiers/status required for subscription management
+- short-lived source/suggestion action metadata
 
-The old `conversations`, `responses`, and `reactions` tables were removed from production.
+Normal memory lookups are scoped by Telegram user ID.
 
-Personalization memory is scoped by Telegram user ID. Normal AI requests never query another user's memory.
+## Plans
 
-## Telegram commands
+### Free
+
+- Llama Fast only
+- 100 AI replies/month
+- 5 web searches/month
+- 10 voice inputs/month
+- 10 voice outputs/month
+- Luna voice
+
+### Paid
+
+- 99 Telegram Stars every 30 days
+- Llama Fast, Smart and Reasoning
+- 1000 AI replies/month
+- 100 web searches/month
+- 200 voice inputs/month
+- 200 voice outputs/month
+- all configured Llama voices
+
+Plan constants live in `src/config.js` and can be changed without changing the user-facing architecture.
+
+## Referral rewards
+
+A valid referral gives:
+
+- inviter: +25 Llama Coins
+- invited user: +10 Llama Coins
+
+100 Llama Coins can be exchanged for 7 Paid days. Llama Coins are internal bot rewards and are **not Telegram Stars**.
+
+## User commands
 
 ```text
-/start      Open Llama home
-/models     Choose Llama mode
+/start      Open Llama / continue onboarding
+/plan       Free/Paid plan and checkout
+/models     Choose AI mode
 /web        Web-search settings
-/search     Search the web once
-/voice      Voice-reply settings
-/memory     View private saved memory
-/invite     Referral link, invite count, and invited users
-/new        Start a fresh chat state
-/settings   View current settings
-/about      Version and developer information
-/help       Help and commands
+/search     One-time web search
+/voice      Voice-reply and voice-selection settings
+/profile    View or restart profile setup
+/memory     View private personalization memory
+/rewards    Coins and referral rewards
+/redeem     Redeem a coupon code
+/invite     Personal invite link and invite count
+/settings   Preferences
+/about      Version, birthday and developer
+/help       Help
 /ping       Service status
 ```
 
-## Referral system
+## Birthday scheduler
 
-Each user receives a personal Telegram deep link:
-
-```text
-https://t.me/llamaaiofficial_bot?start=ref_<code>
-```
-
-When a new user starts Llama through that link, the inviter is recorded once. `/invite` shows the user's invite count and recent invited users.
-
-Admin-only referral controls include an invite leaderboard.
-
-## Admin controls
-
-Admin commands are scoped to the configured admin Telegram chat and are not included in normal users' command scope.
+Cloudflare Cron Trigger:
 
 ```text
-/admin
-/admin_users
-/admin_search <name|username|user-id>
-/admin_user <user-id>
-/admin_invites
-/admin_message <user-id> <message>
-/admin_block <user-id>
-/admin_unblock <user-id>
-/admin_stats
+30 18 * * *
 ```
 
-## Voice
+Cloudflare cron runs in UTC. `18:30 UTC` corresponds to `00:00 Asia/Kolkata` on the following calendar day. The scheduled handler checks the current India date, sends user birthday wishes once per year, and announces Llama's birthday on March 2 once per user/year.
 
-- **Speech to text:** Telegram voice notes are transcribed before Llama answers.
-- **Text to speech:** users can request a voice rendering of an answer.
-- **Text + Voice mode:** when enabled, Llama sends the normal text response and a voice response.
+## Telegram Stars subscriptions
 
-## Stickers, emojis, and reactions
+The bot uses Telegram's `XTR` currency for the Paid digital subscription. Access is activated only after Telegram delivers a valid `successful_payment` matching the expected subscription payload and amount. The recurring period is 30 days.
 
-Llama understands Telegram sticker metadata such as the associated emoji and sticker-set name, while avoiding claims about visual details Telegram did not provide.
+Subscription charge IDs are retained only for subscription management such as canceling renewal.
 
-Incoming non-command messages can receive context-sensitive reactions such as ❤️, 😁, 🎉, 🔥, 🤔, 👨‍💻, 😢, or 👀. If Telegram rejects a selected reaction, the bot safely falls back.
+## Coupons
 
-## Web search and sources
-
-Users can enable Web Search for normal messages or use `/search` for a one-time live lookup.
-
-The main answer does not dump a full source list. When sources are available, Telegram shows a **Sources** button; source links are revealed only when the same user taps it.
-
-## Developer context
-
-When asked who built Llama, the assistant identifies **Nadeem** and links to:
+Owner-only coupon creation supports:
 
 ```text
-https://github.com/nadeemmhdm
+/admin_coupon CODE PAID_DAYS BONUS_COINS MAX_USES VALID_DAYS
 ```
 
-Questions about recent public GitHub activity or public projects use live public GitHub data rather than a hard-coded project list.
+A coupon can grant Paid access, Llama Coins, or both without charging the user. Coupons support expiry, usage caps, one redemption per user, listing, and disabling.
 
 ## Architecture
 
@@ -122,30 +129,31 @@ Telegram
    |
    v
 Cloudflare Worker
-   |-- Llama chat + live web search
-   |-- Telegram rich UI / source / suggestion controls
-   |-- Workers AI voice STT/TTS
+   |-- Llama chat + web search
+   |-- Telegram Stars subscription flow
+   |-- scheduled birthday job
+   |-- Workers AI speech-to-text / text-to-speech
    |-- D1
-   |     |-- users + preferences
-   |     |-- useful private memories
-   |     |-- referral metadata
-   |     |-- short-lived response actions
-   |     `-- admin operational logs
-   `-- public GitHub context when relevant
+   |     |-- users / profiles / plan state
+   |     |-- private useful memories
+   |     |-- monthly usage
+   |     |-- referrals / Llama Coins
+   |     |-- coupons / redemptions
+   |     |-- payments metadata
+   |     `-- short-lived source/suggestion actions
+   `-- Public GitHub context when relevant
 ```
-
-There is no single long-running Telegram bot process. Cloudflare Workers handle concurrent requests globally, and D1 read replication is enabled.
 
 ## Repository structure
 
 ```text
-src/index.js      Telegram update router, commands, referrals, admin controls, status page
-src/config.js     Version, model modes, messages, keyboards, URLs
-src/telegram.js   Telegram API, formatting, reactions, voice transport
-src/db.js         D1 user settings, memory, referrals, short-lived actions
-src/ai.js         AI replies, search, suggestions, memory extraction, STT/TTS
+src/index.js      Telegram router, onboarding, plans, payments, scheduler
+src/config.js     UI, plan/model/voice constants and keyboards
+src/telegram.js   Telegram API, reactions, formatting and voice transport
+src/db.js         D1 account, profile, quota, reward and subscription storage
+src/ai.js         AI replies, search, memory extraction, quotas and voice
 schema.sql        D1 schema
-wrangler.jsonc    Cloudflare Worker bindings/configuration
+wrangler.jsonc    Worker bindings and midnight-IST cron
 ```
 
 ## Production
@@ -162,40 +170,17 @@ Health:
 https://llamaaiofficial-bot.nadeemmhdm-ai.workers.dev/health
 ```
 
-Webhook:
+Bot:
 
 ```text
-https://llamaaiofficial-bot.nadeemmhdm-ai.workers.dev/webhook
+https://t.me/llamaaiofficial_bot
 ```
-
-The Worker root page and health JSON expose the running Llama version and identify Nadeem as the developer with the GitHub profile link.
-
-## Required bindings and secrets
-
-Bindings:
-
-```text
-DB   Cloudflare D1
-AI   Workers AI
-```
-
-Secrets:
-
-```text
-TELEGRAM_BOT_TOKEN
-TELEGRAM_WEBHOOK_SECRET
-OLLAMA_API_KEY
-ADMIN_CHAT_ID
-```
-
-Never commit real credentials to GitHub.
 
 ## Security
 
-- Telegram webhook secret validation is enabled.
-- Credentials remain encrypted Worker secrets.
-- Personalization memory is always user-scoped.
-- Source/suggestion callbacks verify ownership using Telegram user ID.
-- Admin operations require the configured admin chat ID.
-- Diagnostic/setup routes are not included in the production Worker.
-- Public GitHub context only uses publicly visible activity.
+- Telegram webhook secret validation
+- Worker secrets stay outside GitHub
+- per-user memory/action ownership checks
+- successful-payment payload and amount validation before Paid activation
+- coupon caps, expiration, one-redemption-per-user protection
+- no full conversation or AI answer persistence in D1
