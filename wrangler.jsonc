@@ -5,12 +5,18 @@
   "compatibility_date": "2026-10-10",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
-  "vars": {
-    "OLLAMA_MODEL": "gpt-oss:120b",
-    "SYSTEM_PROMPT": "You are a helpful Telegram AI assistant. Give clear and concise answers."
-  },
+  "kv_namespaces": [
+    {
+      "binding": "USER_STATE",
+      "id": "017563e62cec42eb8cd314131d33b917"
+    }
+  ],
   "secrets": {
-    "required": ["TELEGRAM_BOT_TOKEN", "OLLAMA_API_KEY"]
+    "required": [
+      "TELEGRAM_BOT_TOKEN",
+      "OLLAMA_API_KEY",
+      "TELEGRAM_WEBHOOK_SECRET"
+    ]
   },
   "observability": {
     "enabled": true,
