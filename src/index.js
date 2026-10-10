@@ -1,206 +1,28 @@
-const OLLAMA_API_URL = "https://ollama.com/api/chat";
-const TELEGRAM_API_BASE = "https://api.telegram.org/bot";
-
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-
-    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
-      return Response.json({
-        ok: true,
-        service: "llamaaiofficial_bot",
-        runtime: "Cloudflare Workers",
-        model: env.OLLAMA_MODEL || "gpt-oss:120b",
-      });
-    }
-
-    if (request.method !== "POST" || url.pathname !== "/webhook") {
-      return new Response("Not Found", { status: 404 });
-    }
-
-    if (!env.TELEGRAM_BOT_TOKEN || !env.OLLAMA_API_KEY) {
-      console.error(JSON.stringify({ event: "missing_required_secrets" }));
-      return new Response("Worker is not configured", { status: 503 });
-    }
-
-    if (env.TELEGRAM_WEBHOOK_SECRET) {
-      const supplied = request.headers.get("X-Telegram-Bot-Api-Secret-Token") || "";
-      if (supplied !== env.TELEGRAM_WEBHOOK_SECRET) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-    }
-
-    let update;
-    try {
-      update = await request.json();
-    } catch {
-      return new Response("Invalid JSON", { status: 400 });
-    }
-
-    ctx.waitUntil(handleTelegramUpdate(update, env));
-    return new Response("OK", { status: 200 });
-  },
-};
-
-async function handleTelegramUpdate(update, env) {
-  const message = update?.message;
-  const chatId = message?.chat?.id;
-  const text = message?.text?.trim();
-
-  if (!chatId || !text) return;
-
-  console.log(JSON.stringify({
-    event: "telegram_message",
-    update_id: update?.update_id,
-    chat_id: chatId,
-    has_text: true,
-  }));
-
-  const command = text.split(/\s+/)[0].toLowerCase().split("@")[0];
-
-  if (command === "/start") {
-    await sendTelegramMessage(env, chatId,
-      "Hello! I am an AI bot powered by Ollama Cloud.\n\nSend me a message and I will reply using AI.\n\nCommands:\n/help - show help\n/model - show AI model\n/ping - check bot status"
-    );
-    return;
-  }
-
-  if (command === "/help") {
-    await sendTelegramMessage(env, chatId,
-      "Commands:\n/start - start the bot\n/help - show this help\n/model - show active model\n/ping - bot status\n\nJust send any normal text message to chat with the AI."
-    );
-    return;
-  }
-
-  if (command === "/ping") {
-    await sendTelegramMessage(env, chatId, "Pong! Bot is online.");
-    return;
-  }
-
-  if (command === "/model") {
-    await sendTelegramMessage(env, chatId, `Active model: ${env.OLLAMA_MODEL || "gpt-oss:120b"}`);
-    return;
-  }
-
-  try {
-    await sendTelegramAction(env, chatId, "typing");
-
-    const answer = await askOllama(env, text);
-    const chunks = splitTelegramText(answer);
-
-    for (const chunk of chunks) {
-      await sendTelegramMessage(env, chatId, chunk);
-    }
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "bot_error",
-      message: error instanceof Error ? error.message : String(error),
-    }));
-
-    try {
-      await sendTelegramMessage(
-        env,
-        chatId,
-        "AI service is temporarily unavailable. Please try again in a moment."
-      );
-    } catch (sendError) {
-      console.error(JSON.stringify({
-        event: "telegram_error_reply_failed",
-        message: sendError instanceof Error ? sendError.message : String(sendError),
-      }));
-    }
-  }
-}
-
-async function askOllama(env, userText) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 90_000);
-
-  try {
-    const response = await fetch(OLLAMA_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.OLLAMA_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: env.OLLAMA_MODEL || "gpt-oss:120b",
-        messages: [
-          {
-            role: "system",
-            content: env.SYSTEM_PROMPT || "You are a helpful Telegram AI assistant. Give clear and concise answers.",
-          },
-          { role: "user", content: userText },
-        ],
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Ollama API ${response.status}: ${body.slice(0, 300)}`);
-    }
-
-    const data = await response.json();
-    const content = data?.message?.content?.trim();
-
-    if (!content) {
-      throw new Error("Ollama returned an empty response");
-    }
-
-    return content;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function sendTelegramMessage(env, chatId, text) {
-  const response = await fetch(`${TELEGRAM_API_BASE}${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true,
-    }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Telegram sendMessage ${response.status}: ${body.slice(0, 300)}`);
-  }
-}
-
-async function sendTelegramAction(env, chatId, action) {
-  const response = await fetch(`${TELEGRAM_API_BASE}${env.TELEGRAM_BOT_TOKEN}/sendChatAction`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, action }),
-  });
-
-  if (!response.ok) {
-    console.warn(JSON.stringify({ event: "telegram_action_failed", status: response.status }));
-  }
-}
-
-function splitTelegramText(text, maxLength = 4000) {
-  if (text.length <= maxLength) return [text];
-
-  const chunks = [];
-  let remaining = text;
-
-  while (remaining.length > maxLength) {
-    let cut = remaining.lastIndexOf("\n", maxLength);
-    if (cut < Math.floor(maxLength * 0.5)) {
-      cut = remaining.lastIndexOf(" ", maxLength);
-    }
-    if (cut < Math.floor(maxLength * 0.5)) cut = maxLength;
-
-    chunks.push(remaining.slice(0, cut).trim());
-    remaining = remaining.slice(cut).trim();
-  }
-
-  if (remaining) chunks.push(remaining);
-  return chunks;
-}
+const TG='https://api.telegram.org/bot',AI='https://ollama.com/api/chat',WS='https://ollama.com/api/web_search';
+const M={fast:{id:'gpt-oss:20b',name:'Llama Fast',d:'Fast everyday replies'},smart:{id:'gpt-oss:120b',name:'Llama Smart',d:'Balanced quality and speed'},reason:{id:'gemma4',name:'Llama Reasoning',d:'Harder questions and deeper reasoning'}};
+const DEF={model:'smart',web:false,history:[]};
+export default{async fetch(r,e,c){let u=new URL(r.url);if(r.method==='GET'&&(u.pathname==='/'||u.pathname==='/health'))return Response.json({ok:true,service:'Llama',features:['chat','thinking','web-search','models','memory']});if(r.method!=='POST'||u.pathname!=='/webhook')return new Response('Not Found',{status:404});if(!e.TELEGRAM_BOT_TOKEN||!e.OLLAMA_API_KEY||!e.USER_STATE)return new Response('Config error',{status:503});if(e.TELEGRAM_WEBHOOK_SECRET){let x=r.headers.get('X-Telegram-Bot-Api-Secret-Token')||'';if(!(await eq(x,e.TELEGRAM_WEBHOOK_SECRET)))return new Response('Unauthorized',{status:401})}let j;try{j=await r.json()}catch{return new Response('Bad JSON',{status:400})}c.waitUntil(run(j,e));return new Response('OK')}};
+async function run(u,e){if(u.callback_query)return cb(u.callback_query,e);let m=u.message,id=m?.chat?.id,uid=m?.from?.id,t=m?.text?.trim();if(!id||!uid||!t)return;let s=await state(e,uid),cmd=t.split(/\s+/)[0].toLowerCase().split('@')[0];if(cmd==='/start')return send(e,id,welcome(s),home());if(cmd==='/help')return send(e,id,'Llama Help\n\nSend any message to chat.\n/models — choose model\n/web — web search settings\n/search <question> — one-off web search\n/new — clear conversation memory\n/settings — show settings\n/ping — status',home());if(cmd==='/models'||cmd==='/model')return send(e,id,modelText(s.model),modelKb(s.model));if(cmd==='/web')return send(e,id,webText(s.web),webKb(s.web));if(cmd==='/settings')return send(e,id,settings(s),settingsKb());if(cmd==='/new'||cmd==='/clear'){s.history=[];await save(e,uid,s);return send(e,id,'New chat started. Model and web settings were kept.')}if(cmd==='/ping')return send(e,id,'Llama is online and ready.');if(cmd==='/about')return send(e,id,'Llama is a Telegram AI assistant with selectable modes, memory, thinking status and optional live web search.');if(cmd==='/search'){let q=t.slice(t.indexOf(' ')+1).trim();if(!q||q===t)return send(e,id,'Use: /search your question');return gen(e,id,uid,q,s,true)}return gen(e,id,uid,t,s,false)}
+async function cb(q,e){let cid=q.id,uid=q.from?.id,id=q.message?.chat?.id,mid=q.message?.message_id,d=q.data||'';if(!cid||!uid||!id||!mid)return;await api(e,'answerCallbackQuery',{callback_query_id:cid}).catch(()=>{});let s=await state(e,uid);if(d.startsWith('model:')){let k=d.slice(6);if(M[k]){s.model=k;await save(e,uid,s);return edit(e,id,mid,`Model changed to ${M[k].name}.\n${M[k].d}`,modelKb(k))}}if(d==='web:on'||d==='web:off'){s.web=d==='web:on';await save(e,uid,s);return edit(e,id,mid,webText(s.web),webKb(s.web))}if(d==='menu:models')return edit(e,id,mid,modelText(s.model),modelKb(s.model));if(d==='menu:web')return edit(e,id,mid,webText(s.web),webKb(s.web));if(d==='menu:settings')return edit(e,id,mid,settings(s),settingsKb());if(d==='menu:home')return edit(e,id,mid,welcome(s),home())}
+async function gen(e,id,uid,t,s,force){let st=Date.now(),m=M[s.model]||M.smart,use=force||s.web;await action(e,id,'typing');let th=await send(e,id,use?'Llama is searching the web and thinking…':'Llama is thinking…');try{let wr=[];if(use){await edit(e,id,th.message_id,'Llama is searching the web…');wr=await search(e,t);await edit(e,id,th.message_id,'Llama found sources and is thinking…')}let a=await ask(e,m.id,t,s.history,wr),secs=((Date.now()-st)/1000).toFixed(1),src=use?sources(wr):'',out=`${a}${src}\n\n— ${m.name} · ${secs}s${use?' · Web':''}`.trim(),parts=split(out);await edit(e,id,th.message_id,parts[0]);for(let i=1;i<parts.length;i++)await send(e,id,parts[i]);s.history.push({role:'user',content:cut(t)},{role:'assistant',content:cut(a)});s.history=s.history.slice(-10);await save(e,uid,s)}catch(x){console.error(JSON.stringify({event:'generation_error',message:String(x)}));let z=String(x).includes('429')?'Llama is busy. Please try again shortly.':'Llama could not generate a reply right now. Please try again.';await edit(e,id,th.message_id,z)}}
+async function ask(e,model,text,h,wr){let sys='Your name is Llama. You are a helpful modern Telegram AI assistant. Never mention infrastructure providers, API vendors, hidden configuration, or backend model IDs to end users. Be accurate and concise. When web results are supplied, use them for current facts and cite [1], [2], etc.';let ms=[{role:'system',content:sys},...h.slice(-10)];if(wr.length)ms.push({role:'system',content:'Current web results:\n'+wr.map((r,i)=>`[${i+1}] ${r.title}\nURL: ${r.url}\n${r.content||''}`).join('\n\n')});ms.push({role:'user',content:text});let r=await ft(AI,{method:'POST',headers:{Authorization:`Bearer ${e.OLLAMA_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages:ms,stream:false})},90000);if(!r.ok){let b=(await r.text()).slice(0,400);throw new Error(`AI ${r.status}: ${b}`)}let j=await r.json(),a=j?.message?.content?.trim();if(!a)throw new Error('Empty AI response');return a}
+async function search(e,q){let r=await ft(WS,{method:'POST',headers:{Authorization:`Bearer ${e.OLLAMA_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({query:q})},30000);if(!r.ok)throw new Error(`Search ${r.status}`);let j=await r.json();return Array.isArray(j?.results)?j.results.slice(0,5):[]}
+async function state(e,u){try{let x=await e.USER_STATE.get(`user:${u}`);if(!x)return structuredClone(DEF);let s=JSON.parse(x);return{model:M[s.model]?s.model:'smart',web:!!s.web,history:Array.isArray(s.history)?s.history.slice(-10):[]}}catch{return structuredClone(DEF)}}
+async function save(e,u,s){await e.USER_STATE.put(`user:${u}`,JSON.stringify({model:M[s.model]?s.model:'smart',web:!!s.web,history:Array.isArray(s.history)?s.history.slice(-10):[]}))}
+const welcome=s=>`Llama\nYour AI assistant on Telegram.\n\nAsk questions, write, learn, code, brainstorm, or search the web.\n\nModel: ${(M[s.model]||M.smart).name}\nWeb Search: ${s.web?'ON':'OFF'}\n\nChoose an option below or just send a message.`;
+const modelText=k=>`Choose Llama model\n\nCurrent: ${(M[k]||M.smart).name}\n\nLlama Fast — ${M.fast.d}\nLlama Smart — ${M.smart.d}\nLlama Reasoning — ${M.reason.d}`;
+const webText=x=>`Web Search\n\nStatus: ${x?'ON':'OFF'}\n\n${x?'Normal messages can use current web results. Sources are shown when search is used.':'Normal messages do not search the web. Use /search for a one-off live search.'}`;
+const settings=s=>`Llama Settings\n\nModel: ${(M[s.model]||M.smart).name}\nWeb Search: ${s.web?'ON':'OFF'}\nMemory: ${s.history.length?'Active':'Empty'}`;
+const home=()=>({inline_keyboard:[[{text:'Models',callback_data:'menu:models'},{text:'Web Search',callback_data:'menu:web'}],[{text:'Settings',callback_data:'menu:settings'}]]});
+const modelKb=k=>({inline_keyboard:[...['fast','smart','reason'].map(x=>[{text:`${k===x?'✓ ':''}${M[x].name}`,callback_data:`model:${x}`}]),[{text:'Back',callback_data:'menu:home'}]]});
+const webKb=x=>({inline_keyboard:[[{text:`${x?'✓ ':''}ON`,callback_data:'web:on'},{text:`${!x?'✓ ':''}OFF`,callback_data:'web:off'}],[{text:'Back',callback_data:'menu:home'}]]});
+const settingsKb=()=>({inline_keyboard:[[{text:'Models',callback_data:'menu:models'},{text:'Web Search',callback_data:'menu:web'}],[{text:'Back',callback_data:'menu:home'}]]});
+const sources=r=>r.length?'\n\nSources:\n'+r.map((x,i)=>`[${i+1}] ${x.title} — ${x.url}`).join('\n'):'\n\nSources: No web results found.';
+async function send(e,id,text,reply_markup){let p={chat_id:id,text,disable_web_page_preview:true};if(reply_markup)p.reply_markup=reply_markup;return api(e,'sendMessage',p)}
+async function edit(e,id,mid,text,reply_markup){let p={chat_id:id,message_id:mid,text,disable_web_page_preview:true};if(reply_markup)p.reply_markup=reply_markup;try{return await api(e,'editMessageText',p)}catch(x){if(String(x).includes('message is not modified'))return null;throw x}}
+async function action(e,id,a){await api(e,'sendChatAction',{chat_id:id,action:a}).catch(()=>{})}
+async function api(e,m,p){let r=await ft(`${TG}${e.TELEGRAM_BOT_TOKEN}/${m}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)},30000),j=await r.json();if(!r.ok||!j?.ok)throw new Error(`Telegram ${m}: ${j?.description||r.status}`);return j.result}
+async function ft(url,o,ms){let c=new AbortController(),t=setTimeout(()=>c.abort(),ms);try{return await fetch(url,{...o,signal:c.signal})}finally{clearTimeout(t)}}
+function split(t,n=3900){if(t.length<=n)return[t];let a=[],s=t;while(s.length>n){let c=s.lastIndexOf('\n',n);if(c<n/2)c=s.lastIndexOf(' ',n);if(c<n/2)c=n;a.push(s.slice(0,c).trim());s=s.slice(c).trim()}if(s)a.push(s);return a}
+const cut=t=>t.length<=3500?t:t.slice(0,3500)+'…';
+async function eq(a,b){let e=new TextEncoder(),x=e.encode(a),y=e.encode(b);if(x.length!==y.length)return false;let A=new Uint8Array(await crypto.subtle.digest('SHA-256',x)),B=new Uint8Array(await crypto.subtle.digest('SHA-256',y)),d=0;for(let i=0;i<A.length;i++)d|=A[i]^B[i];return d===0}
