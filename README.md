@@ -1,44 +1,87 @@
-# llamaaiofficial_bot
+# Llama Telegram AI Bot
 
-A basic Telegram AI bot powered by the Ollama Cloud API and hosted on Cloudflare Workers.
-
-## Architecture
-
-Telegram -> Cloudflare Worker webhook -> Ollama Cloud API -> Telegram reply
-
-No local Ollama installation is required.
+A Cloudflare Workers Telegram AI assistant named **Llama** with model switching, live web search, persistent preferences, conversation memory, and a cleaner interactive Telegram UI.
 
 ## Features
 
-- Cloudflare Workers webhook hosting
-- Ollama Cloud direct API authentication
-- `/start`, `/help`, `/ping`, `/model`
-- Telegram typing indicator
+- AI identity: **Llama**
+- `Llama Fast`, `Llama Smart`, and `Llama Reasoning` selectable modes
+- Inline Telegram model/settings buttons
+- Temporary **Llama is thinking…** message while generating
+- Response generation-time footer
+- Live web search with source links
+- `/search <question>` for one-off live search
+- Web Search ON/OFF preference
+- Persistent per-user preferences and conversation memory using Cloudflare KV
+- `/new` to clear conversation context without resetting settings
 - Long-response splitting
-- Worker health endpoint
-- Structured error logging
-- API keys stored as Cloudflare secrets, never in GitHub
+- Telegram webhook secret validation
+- Cloudflare Worker health endpoint
+- Structured Worker logging
+- Secrets kept outside GitHub
 
-## Required secrets
-
-- `TELEGRAM_BOT_TOKEN` — create a bot with `@BotFather`
-- `OLLAMA_API_KEY` — create an API key in your Ollama account
-
-Optional:
-
-- `TELEGRAM_WEBHOOK_SECRET` — Telegram webhook secret-token validation
-
-## Model
-
-Default model:
+## Telegram commands
 
 ```text
-gpt-oss:120b
+/start      Open Llama
+/models     Choose Llama model
+/web        Web-search settings
+/search     Search the web for one question
+/new        Start a fresh conversation
+/settings   View current settings
+/help       Show help
+/ping       Check service status
+/about      About Llama
 ```
 
-Change `OLLAMA_MODEL` in `wrangler.jsonc` if required.
+## Model modes
 
-## Local setup
+The Telegram UI exposes friendly Llama model names instead of infrastructure/backend model identifiers:
+
+- **Llama Fast** — fast everyday replies
+- **Llama Smart** — balanced quality and speed
+- **Llama Reasoning** — harder questions and deeper reasoning
+
+Backend model mappings are defined in `src/index.js` and can be changed independently from the Telegram-facing names.
+
+## Web search
+
+Users can either:
+
+- run `/search your question` for a one-time live search, or
+- enable **Web Search** from `/web` so normal conversations can use current web information.
+
+When web search is used, Llama includes source links in the response.
+
+## Persistent state
+
+Cloudflare KV binding:
+
+```text
+USER_STATE
+```
+
+It stores each Telegram user's selected model, web-search preference, and a short conversation history.
+
+## Required Worker configuration
+
+Secrets:
+
+```text
+TELEGRAM_BOT_TOKEN
+OLLAMA_API_KEY
+TELEGRAM_WEBHOOK_SECRET
+```
+
+KV binding:
+
+```text
+USER_STATE
+```
+
+Never commit real API keys or Telegram tokens to GitHub.
+
+## Local development
 
 ```bash
 npm install
@@ -46,58 +89,47 @@ cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-Add the real tokens to `.dev.vars`. This file is ignored by Git.
+Add local secrets to `.dev.vars`. The real `.dev.vars` file must remain ignored by Git.
 
-## Deploy to Cloudflare
-
-Authenticate Wrangler and set the Worker secrets:
+## Deploy
 
 ```bash
-npx wrangler login
-npx wrangler secret put TELEGRAM_BOT_TOKEN
-npx wrangler secret put OLLAMA_API_KEY
 npm run deploy
 ```
 
-If you want Telegram webhook secret verification too:
-
-```bash
-npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
-```
-
-## Register Telegram webhook
-
-After deployment, your webhook URL is:
+Production Worker:
 
 ```text
-https://YOUR-WORKER.workers.dev/webhook
+https://llamaaiofficial-bot.nadeemmhdm-ai.workers.dev
 ```
 
-Register it with Telegram:
-
-```bash
-curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -d "url=https://YOUR-WORKER.workers.dev/webhook"
-```
-
-If `TELEGRAM_WEBHOOK_SECRET` is configured in Cloudflare, register the same value with Telegram:
-
-```bash
-curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -d "url=https://YOUR-WORKER.workers.dev/webhook" \
-  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
-```
-
-## Health check
-
-Open:
+Health endpoint:
 
 ```text
-https://YOUR-WORKER.workers.dev/health
+https://llamaaiofficial-bot.nadeemmhdm-ai.workers.dev/health
 ```
 
-The endpoint returns service status and the configured model name without exposing secrets.
+Telegram webhook endpoint:
+
+```text
+https://llamaaiofficial-bot.nadeemmhdm-ai.workers.dev/webhook
+```
+
+## Telegram webhook
+
+Register the webhook with both update types required by the bot:
+
+```text
+message
+callback_query
+```
+
+Use the same value configured as `TELEGRAM_WEBHOOK_SECRET` for Telegram's webhook `secret_token`.
 
 ## Security
 
-Never commit Telegram or Ollama credentials to GitHub. Use Cloudflare Worker secrets for production and `.dev.vars` only for local development.
+- API credentials are Worker secrets, not source-code variables.
+- Telegram webhook requests can be authenticated using `X-Telegram-Bot-Api-Secret-Token`.
+- Secret comparison is performed without directly comparing the secret strings.
+- Cloudflare KV is accessed through a Worker binding rather than REST credentials.
+- Diagnostic/setup routes are not included in the production Worker.
