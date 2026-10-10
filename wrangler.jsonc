@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "llamaaiofficial-bot",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "OLLAMA_MODEL": "gpt-oss:120b",
+    "SYSTEM_PROMPT": "You are a helpful Telegram AI assistant. Give clear and concise answers."
+  },
+  "secrets": {
+    "required": ["TELEGRAM_BOT_TOKEN", "OLLAMA_API_KEY"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
