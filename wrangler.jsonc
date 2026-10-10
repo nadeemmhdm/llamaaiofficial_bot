@@ -5,21 +5,16 @@
   "compatibility_date": "2026-10-10",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
-  "kv_namespaces": [
+  "ai": { "binding": "AI" },
+  "d1_databases": [
     {
-      "binding": "USER_STATE",
-      "id": "017563e62cec42eb8cd314131d33b917"
+      "binding": "DB",
+      "database_name": "llamaaiofficial_bot",
+      "database_id": "b73e7119-b312-4d7f-997c-2251b4136620"
     }
   ],
   "secrets": {
-    "required": [
-      "TELEGRAM_BOT_TOKEN",
-      "OLLAMA_API_KEY",
-      "TELEGRAM_WEBHOOK_SECRET"
-    ]
+    "required": ["TELEGRAM_BOT_TOKEN", "OLLAMA_API_KEY", "TELEGRAM_WEBHOOK_SECRET", "ADMIN_CHAT_ID"]
   },
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1
-  }
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
 }
