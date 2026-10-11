@@ -4,10 +4,22 @@ import {memories,saveMemory,saveAction,ownedAction,getUsage,bumpUsage} from './d
 
 function limitsFor(user){return PLAN_LIMITS[isPaid(user)?'paid':'free'];}
 function todayIST(){const p=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());return`${p.find(x=>x.type==='year')?.value}-${p.find(x=>x.type==='month')?.value}-${p.find(x=>x.type==='day')?.value}`;}
-function isDailyVoiceQuotaError(e){const s=String(e?.message||e||'').toLowerCase();return s.includes('daily free allocation')||s.includes('10,000 neurons')||s.includes('10000 neurons')||(s.includes('neurons')&&s.includes('upgrade'))||s.includes('error: 4006');}
+function isDailyVoiceQuotaError(e){const s=String(e?.message||e||'').toLowerCase();return s.includes('daily free allocation')||s.includes('10,000 neurons')||s.includes('10000 neurons')||(s.includes('neurons')&&s.includes('upgrade'))||s.includes('error: 4006')||s.includes('4006:');}
 function isCapacityError(e){const s=String(e?.message||e||'').toLowerCase();return s.includes('429')||s.includes('capacity temporarily exceeded')||s.includes('3040');}
 function bytesToBase64(bytes){let bin='';for(let i=0;i<bytes.length;i+=0x8000)bin+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(bin);}
 function base64ToBytes(s){const bin=atob(String(s||'').replace(/^data:[^,]+,/,'')),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out;}
+
+function thinkingFrames(text,useWeb){
+  const q=String(text||'').toLowerCase();
+  if(useWeb)return ['🔎 <i>Searching fresh sources…</i>','🌐 <i>Checking the latest information…</i>','🧭 <i>Comparing useful sources…</i>','🧠 <i>Connecting the findings…</i>','✨ <i>Preparing your answer…</i>'];
+  if(/code|bug|error|github|deploy|api|worker|javascript|python|react|sql/i.test(q))return ['🧩 <i>Understanding the issue…</i>','🔍 <i>Inspecting the details…</i>','🧠 <i>Working through the logic…</i>','🛠 <i>Building a useful solution…</i>','✨ <i>Polishing the answer…</i>'];
+  return ['💭 <i>Understanding your request…</i>','🧠 <i>Connecting the details…</i>','✨ <i>Working on a clear answer…</i>','🪄 <i>Refining the response…</i>','🦙 <i>Almost ready…</i>'];
+}
+function startThinkingAnimation(env,chatId,messageId,text,useWeb){
+  const frames=thinkingFrames(text,useWeb),spin=['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];let i=0,active=true,pending=Promise.resolve();
+  const timer=setInterval(()=>{if(!active)return;const frame=spin[i%spin.length]+' '+frames[i%frames.length];i++;pending=pending.then(async()=>{if(!active)return;await editText(env,chatId,messageId,frame,null,{parse_mode:'HTML'}).catch(()=>{});});},2400);
+  return async()=>{active=false;clearInterval(timer);await pending.catch(()=>{});};
+}
 
 export async function generateReply(env,ctx,msg,text,user,opt={}){
   const uid=Number(msg.from.id),chatId=Number(msg.chat.id),started=Date.now(),paid=isPaid(user),limits=limitsFor(user),usage=await getUsage(env,uid);
@@ -17,18 +29,20 @@ export async function generateReply(env,ctx,msg,text,user,opt={}){
   if(useWeb&&Number(usage.web_count)>=limits.web){if(opt.forceWeb)return sendText(env,chatId,`🔎 <b>Monthly web-search limit reached.</b>\nYour ${paid?'Paid':'Free'} plan includes ${limits.web} searches per month.`,null,{parse_mode:'HTML'});useWeb=false;}
   await sendAction(env,chatId,'typing').catch(()=>{});
   let statusId=opt.statusMessageId;
-  if(!statusId){const s=await sendText(env,chatId,useWeb?'🔎 <i>Llama is searching the web…</i>':'💭 <i>Llama is thinking…</i>',null,{parse_mode:'HTML'});statusId=s.message_id;}
+  if(!statusId){const s=await sendText(env,chatId,thinkingFrames(text,useWeb)[0],null,{parse_mode:'HTML'});statusId=s.message_id;}
+  const stopThinking=startThinkingAnimation(env,chatId,statusId,text,useWeb);
   try{
     const [mem,gh]=await Promise.all([memories(env,uid),needsGitHub(text)?githubContext():Promise.resolve('')]);
     let sources=[];
     if(useWeb){sources=await search(env,text);await bumpUsage(env,uid,'web');await editText(env,chatId,statusId,'🔎 <i>Llama found fresh results and is thinking…</i>',null,{parse_mode:'HTML'});}
     const replyContext=buildReplyContext(msg),raw=await ask(env,model,text,user,mem,sources,gh,replyContext),answer=ensureDeveloperLink(text,raw),suggestions=await suggestionsFor(env,text,answer).catch(()=>fallbackSuggestions(text)),rid=crypto.randomUUID().replaceAll('-','').slice(0,16),elapsed=((Date.now()-started)/1000).toFixed(1),rendered=renderHtml(answer)+`\n\n<blockquote>⚡ ${escapeHtml(model.name)} · ${elapsed}s${useWeb?' · Web':''}</blockquote>`,parts=splitRendered(rendered),kb=responseKeyboard(rid,sources.length,suggestions);
+    await stopThinking();
     await editText(env,chatId,statusId,parts[0],parts.length===1?kb:null,{parse_mode:'HTML'});let last=statusId;for(let i=1;i<parts.length;i++){const s=await sendText(env,chatId,parts[i],i===parts.length-1?kb:null,{parse_mode:'HTML'});last=s.message_id;}
     await Promise.all([saveAction(env,uid,rid,sources.slice(0,5),suggestions.slice(0,4)),bumpUsage(env,uid,'ai')]);
     ctx.waitUntil(extractMemories(env,uid,text).catch(()=>{}));
     if(user?.voice_reply)ctx.waitUntil(sendVoiceForText(env,chatId,answer,user,{notify:true}).catch(e=>console.error(JSON.stringify({event:'auto_voice_error',message:String(e)}))));
     return{responseId:rid,messageId:last,answer};
-  }catch(e){console.error(JSON.stringify({event:'generation_error',message:String(e)}));const m=String(e).includes('429')?'Llama is busy right now. Please try again shortly.':'Llama could not generate a reply right now. Please try again.';await editText(env,chatId,statusId,`⚠️ ${escapeHtml(m)}`,null,{parse_mode:'HTML'}).catch(()=>{});}
+  }catch(e){await stopThinking();console.error(JSON.stringify({event:'generation_error',message:String(e)}));const m=String(e).includes('429')?'Llama is busy right now. Please try again shortly.':'Llama could not generate a reply right now. Please try again.';await editText(env,chatId,statusId,`⚠️ ${escapeHtml(m)}`,null,{parse_mode:'HTML'}).catch(()=>{});}
 }
 
 async function ask(env,model,text,user,mem,sources,gh,replyContext){
@@ -76,31 +90,50 @@ export async function handleVoiceMessage(env,ctx,msg,user){
     return generateReply(env,ctx,msg,text,user,{statusMessageId:s.message_id});
   }catch(e){
     console.error(JSON.stringify({event:'voice_error',message:String(e)}));
-    const message=isDailyVoiceQuotaError(e)?'🎙️ <b>Voice is temporarily unavailable today.</b>\n\nThe daily voice-processing allowance is exhausted. Text chat still works, and voice will return after the daily reset.':isCapacityError(e)?'🎙️ <b>Voice processing is busy right now.</b>\nPlease try the voice note again shortly.':'🎙️ I couldn’t process that voice note. Please try a shorter, clearer recording.';
+    const es=String(e?.message||e||'');
+    const message=isDailyVoiceQuotaError(e)?'🎙️ <b>Voice is temporarily unavailable today.</b>\n\nThe daily voice-processing allowance is exhausted. Text chat still works, and voice will return after the daily reset.':isCapacityError(e)?'🎙️ <b>Voice processing is busy right now.</b>\nPlease try the voice note again shortly.':/Voice download|Telegram getFile/i.test(es)?'🎙️ <b>I couldn’t download that voice note from Telegram.</b>\nPlease resend the voice note once.':'🎙️ I couldn’t process that voice note. Please try a shorter, clearer recording.';
     return editText(env,chatId,s.message_id,message,null,{parse_mode:'HTML'}).catch(()=>sendText(env,chatId,message,null,{parse_mode:'HTML'}));
   }
 }
 
 export async function showSources(env,uid,chatId,id){const row=await ownedAction(env,uid,id);if(!row)return sendText(env,chatId,'🔎 Sources are no longer available for this reply.');let s=[];try{s=JSON.parse(row.sources_json||'[]');}catch{}if(!s.length)return sendText(env,chatId,'🔎 No web sources were used for this reply.');const html=['<b>🔎 Sources</b>','',...s.slice(0,5).map((x,i)=>`${i+1}. <a href="${escapeAttr(x.url)}">${escapeHtml(x.title||x.url)}</a>`)].join('\n');return sendText(env,chatId,html,null,{parse_mode:'HTML',link_preview_options:{is_disabled:true}});}
 
-async function rawAudioBlob(raw,mime){if(raw instanceof Response){const ab=await raw.arrayBuffer();if(ab.byteLength<64)throw new Error('TTS returned empty audio');return new Blob([ab],{type:raw.headers.get('content-type')||mime});}if(raw?.audio){const b=base64ToBytes(raw.audio);if(b.byteLength<64)throw new Error('TTS returned empty audio');return new Blob([b],{type:mime});}if(typeof raw==='string'){const b=base64ToBytes(raw);if(b.byteLength<64)throw new Error('TTS returned empty audio');return new Blob([b],{type:mime});}throw new Error('Unsupported TTS response');}
-async function synthesizeEfficient(env,text){const raw=await env.AI.run('@cf/myshell-ai/melotts',{prompt:text,lang:'en'},{returnRawResponse:true});return rawAudioBlob(raw,'audio/mpeg');}
-async function synthesizeAura(env,text,speaker){const raw=await env.AI.run('@cf/deepgram/aura-1',{text,speaker,encoding:'opus',container:'ogg'},{returnRawResponse:true});return rawAudioBlob(raw,'audio/ogg');}
+function ttsProviderError(raw){if(!raw||typeof raw!=='object'||raw instanceof Response||raw instanceof Blob||raw instanceof ReadableStream||raw instanceof ArrayBuffer||ArrayBuffer.isView(raw)||Array.isArray(raw))return'';const parts=[];if(typeof raw.message==='string')parts.push(raw.message);if(typeof raw.error==='string')parts.push(raw.error);else if(raw.error?.message)parts.push(raw.error.message);if(Array.isArray(raw.errors))for(const e of raw.errors){const m=e?.message||e?.detail||e?.error;if(m)parts.push(String(m));}if(raw.success===false||raw.error||(Array.isArray(raw.errors)&&raw.errors.length))return parts.filter(Boolean).join(' | ')||'Workers AI TTS request failed';return'';}
+async function audioFromValue(value,mime){
+  if(value==null)throw new Error('TTS returned no audio payload');
+  const pe=ttsProviderError(value);if(pe)throw new Error(pe);
+  if(value instanceof Blob){if(value.size<256)throw new Error('TTS returned empty audio');return value;}
+  if(value instanceof ArrayBuffer)value=new Uint8Array(value);
+  if(ArrayBuffer.isView(value)){const b=new Uint8Array(value.buffer,value.byteOffset,value.byteLength);if(b.byteLength<256)throw new Error('TTS returned empty audio');return new Blob([b],{type:mime});}
+  if(Array.isArray(value)){const b=new Uint8Array(value);if(b.byteLength<256)throw new Error('TTS returned empty audio');return new Blob([b],{type:mime});}
+  if(typeof value==='string'){const s=value.trim();if(/^https?:\/\//i.test(s)){const r=await timedFetch(s,{},30000);if(!r.ok)throw new Error('TTS audio URL '+r.status);return rawAudioBlob(r,mime);}if(s.startsWith('{')){try{return rawAudioBlob(JSON.parse(s),mime);}catch(e){if(isDailyVoiceQuotaError(e)||isCapacityError(e))throw e;}}const b=base64ToBytes(s);if(b.byteLength<256)throw new Error('TTS returned empty audio');return new Blob([b],{type:mime});}
+  if(typeof value==='object'){for(const k of ['audio','audio_data','audioData','audio_url','audioUrl','bytes','data','body','result','output','response','content']){if(value[k]!=null){try{return await audioFromValue(value[k],mime);}catch(e){if(isDailyVoiceQuotaError(e)||isCapacityError(e))throw e;}}}}
+  throw new Error('Unsupported TTS audio payload');
+}
+async function rawAudioBlob(raw,mime){
+  const pe=ttsProviderError(raw);if(pe)throw new Error(pe);
+  if(raw instanceof Response){const ct=String(raw.headers.get('content-type')||'').toLowerCase();if(ct.includes('application/json'))return rawAudioBlob(await raw.json(),mime);const ab=await raw.arrayBuffer();if(ab.byteLength<256)throw new Error('TTS returned empty audio');return new Blob([ab],{type:ct.split(';')[0]||mime});}
+  if(raw instanceof ReadableStream){const ab=await new Response(raw).arrayBuffer();if(ab.byteLength<256)throw new Error('TTS returned empty audio');return new Blob([ab],{type:mime});}
+  if(raw?.body instanceof ReadableStream){const ab=await new Response(raw.body).arrayBuffer();if(ab.byteLength<256)throw new Error('TTS returned empty audio');return new Blob([ab],{type:mime});}
+  return audioFromValue(raw,mime);
+}
+function estimateSpeechSeconds(text){const words=String(text||'').trim().split(/\s+/).filter(Boolean).length;return Math.max(1,Math.min(900,Math.ceil(words/2.35)));}
+async function synthesizeEfficient(env,text){const raw=await env.AI.run('@cf/myshell-ai/melotts',{prompt:text,lang:'en'});return rawAudioBlob(raw,'audio/mpeg');}
+async function synthesizeAura(env,text,speaker){const raw=await env.AI.run('@cf/deepgram/aura-1',{text,speaker,encoding:'opus',container:'ogg'});return rawAudioBlob(raw,'audio/ogg');}
 
 export async function sendVoiceForText(env,chatId,text,user,opt={}){
-  const notify=opt.notify!==false;
-  if(!env.AI){if(notify)return sendText(env,chatId,'🔊 Voice output is not available right now.');return;}
+  const notify=opt.notify!==false;if(!env.AI){if(notify)return sendText(env,chatId,'🔊 Voice output is not available right now.');return;}
   const uid=Number(user?.user_id),usage=await getUsage(env,uid),limit=limitsFor(user).voiceOut;
   if(Number(usage.voice_out_count)>=limit){if(notify)return sendText(env,chatId,`🔊 <b>Monthly voice-output limit reached.</b>\nYour ${isPaid(user)?'Paid':'Free'} plan includes ${limit} voice outputs per month.`,null,{parse_mode:'HTML'});return;}
   const maxChars=isPaid(user)?1500:900,clean=stripFormatting(String(text||'')).replace(/⚡ .*$/s,'').trim().slice(0,maxChars);if(!clean)return;
-  const paid=isPaid(user),key=paid&&VOICES[user?.voice_name]?user.voice_name:'luna',voice=VOICES[key]||VOICES.luna;
+  const duration=estimateSpeechSeconds(clean),paid=isPaid(user),key=paid&&VOICES[user?.voice_name]?user.voice_name:'luna',v=VOICES[key]||VOICES.luna;
   try{
     if(!paid||key==='luna'){
-      try{const blob=await synthesizeEfficient(env,clean);await sendAudioBlob(env,chatId,blob,'🔊 Llama voice reply');}
-      catch(e){if(isDailyVoiceQuotaError(e)||isCapacityError(e))throw e;console.error(JSON.stringify({event:'tts_melotts_failed',message:String(e)}));const blob=await synthesizeAura(env,clean,'luna');await sendVoiceBlob(env,chatId,blob);}
+      try{const blob=await synthesizeEfficient(env,clean);await sendAudioBlob(env,chatId,blob,'🔊 Llama voice reply',duration);}
+      catch(e){if(isDailyVoiceQuotaError(e)||isCapacityError(e))throw e;console.error(JSON.stringify({event:'tts_melotts_failed',message:String(e)}));const blob=await synthesizeAura(env,clean,'luna');await sendVoiceBlob(env,chatId,blob,'🔊 Llama voice reply',duration);}
     }else{
-      try{const blob=await synthesizeAura(env,clean,voice.speaker);await sendVoiceBlob(env,chatId,blob);}
-      catch(e){if(isDailyVoiceQuotaError(e)||isCapacityError(e))throw e;console.error(JSON.stringify({event:'tts_aura_failed',message:String(e)}));const blob=await synthesizeEfficient(env,clean);await sendAudioBlob(env,chatId,blob,'🔊 Llama voice reply');}
+      try{const blob=await synthesizeAura(env,clean,v.speaker);await sendVoiceBlob(env,chatId,blob,'🔊 Llama voice reply',duration);}
+      catch(e){if(isDailyVoiceQuotaError(e)||isCapacityError(e))throw e;console.error(JSON.stringify({event:'tts_aura_failed',message:String(e)}));const blob=await synthesizeEfficient(env,clean);await sendAudioBlob(env,chatId,blob,'🔊 Llama voice reply',duration);}
     }
     await bumpUsage(env,uid,'voiceOut');
   }catch(e){
