@@ -14,6 +14,7 @@ import {
   createCoupon,listCoupons,disableCoupon,birthdayUsers,markBirthdaySent,llamaBirthdayUsers,markLlamaBirthdaySent
 } from './db.js';
 import {generateReply,handleVoiceMessage,showSources,sendVoiceForText} from './ai.js';
+import {handleImageMessage,handleDocumentMessage} from './media.js';
 
 const PAYMENT_PAYLOAD='llama_paid_monthly_v1';
 
@@ -21,7 +22,7 @@ export default {
   async fetch(req,env,ctx){
     const u=new URL(req.url);
     if(req.method==='GET'&&u.pathname==='/')return new Response(statusPage(),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
-    if(req.method==='GET'&&u.pathname==='/health')return Response.json({ok:true,service:'Llama',version:VERSION,status:'online',birthday:LLAMA_BIRTHDAY,developed_by:'Nadeem',github:GITHUB_URL,bot:BOT_URL,plans:{free:'Llama Fast',paid:`${PAID_STARS} XTR / 30 days`},features:['personalized-profile','birthday-wishes','plans','telegram-stars','coupons','coins','referrals','model-gating','web-search','sources-button','suggestions','private-memory','voice-selection','voice-input-output','stickers-emojis','d1']},{headers:{'Cache-Control':'no-store'}});
+    if(req.method==='GET'&&u.pathname==='/health')return Response.json({ok:true,service:'Llama',version:VERSION,status:'online',birthday:LLAMA_BIRTHDAY,developed_by:'Nadeem',github:GITHUB_URL,bot:BOT_URL,plans:{free:'Llama Fast',paid:`${PAID_STARS} XTR / 30 days`},features:['personalized-profile','birthday-wishes','plans','telegram-stars','coupons','coins','referrals','model-gating','web-search','sources-button','suggestions','private-memory','voice-selection','voice-input-output','image-analysis','file-analysis','stickers-emojis','d1']},{headers:{'Cache-Control':'no-store'}});
     if(req.method!=='POST'||u.pathname!=='/webhook')return new Response('Not Found',{status:404});
     if(!env.TELEGRAM_BOT_TOKEN||!env.OLLAMA_API_KEY||!env.DB)return new Response('Config error',{status:503});
     if(env.TELEGRAM_WEBHOOK_SECRET&&!await secureEqual(req.headers.get('X-Telegram-Bot-Api-Secret-Token')||'',env.TELEGRAM_WEBHOOK_SECRET))return new Response('Unauthorized',{status:401});
@@ -35,9 +36,8 @@ export default {
 async function handleUpdate(update,env,ctx){
   try{
     if(update.callback_query)return handleCallback(update.callback_query,env,ctx);
-    if(update.subscription){console.log(JSON.stringify({event:'subscription_update',user_id:update.subscription?.user?.id||null}));return;}
     const msg=update.message;if(!msg?.chat?.id||!msg?.from?.id)return;
-    const uid=Number(msg.from.id),chatId=Number(msg.chat.id),rawText=String(msg.text||'').trim(),cmd=rawText?rawText.split(/\s+/)[0].toLowerCase().split('@')[0]:'',startParam=cmd==='/start'?(rawText.split(/\s+/)[1]||''):'';
+    const uid=Number(msg.from.id),chatId=Number(msg.chat.id),rawText=String(msg.text||msg.caption||'').trim(),cmd=rawText?rawText.split(/\s+/)[0].toLowerCase().split('@')[0]:'',startParam=cmd==='/start'?(rawText.split(/\s+/)[1]||''):'';
     await upsertUser(env,msg.from,chatId,startParam);
     if(cmd==='/start')ctx.waitUntil(registerTelegram(env).catch(()=>{}));
     let user=await getUser(env,uid);
@@ -49,8 +49,10 @@ async function handleUpdate(update,env,ctx){
     if(!Number(user?.profile_complete))return handleOnboardingMessage(env,msg,user,rawText,cmd);
 
     if(msg.voice)return handleVoiceMessage(env,ctx,msg,user);
+    if(msg.photo?.length)return handleImageMessage(env,ctx,msg,user);
+    if(msg.document)return handleDocumentMessage(env,ctx,msg,user);
     if(msg.sticker){const e=msg.sticker.emoji||'unspecified',set=msg.sticker.set_name||'unknown';const prompt=`The user sent a Telegram sticker. Telegram metadata says its associated emoji is ${e} and sticker set is ${set}. Understand the likely emotion or intent from this metadata and respond naturally. Do not claim exact visual details that are not provided.`;return generateReply(env,ctx,msg,prompt,user,{displayPrompt:`Sticker ${e}`});}
-    if(!rawText)return sendText(env,chatId,'🦙 I can understand text, emojis, Telegram stickers and voice notes. Send me something and I’ll respond. ✨',homeKeyboard(),{parse_mode:'HTML'});
+    if(!rawText)return sendText(env,chatId,'🦙 I can understand text, images, supported files, emojis, Telegram stickers and voice notes. Send me something and I’ll respond. ✨',homeKeyboard(),{parse_mode:'HTML'});
 
     if(cmd==='/start')return sendText(env,chatId,welcomeText(user),homeKeyboard(),{parse_mode:'HTML'});
     if(cmd==='/help')return sendText(env,chatId,helpText(),homeKeyboard(),{parse_mode:'HTML'});
@@ -126,7 +128,7 @@ async function handleCallback(q,env,ctx){
   if(d==='plan:upgrade')return sendUpgradeLink(env,chatId,user);
   if(d==='plan:coupon')return sendText(env,chatId,'🎟 Send your coupon like this:\n<code>/redeem YOURCODE</code>',null,{parse_mode:'HTML'});
   if(d==='plan:cancel')return cancelStarRenewal(env,chatId,user);
-  if(d==='reward:redeem'){const r=await redeemCoinsForPaid(env,uid);if(!r.ok)return sendText(env,chatId,'🪙 You need at least <b>100 Llama Coins</b> to redeem 7 Paid days.',null,{parse_mode:'HTML'});user=await getUser(env,uid);return sendText(env,chatId,'⭐ <b>Reward redeemed!</b>\n7 Paid days were added to your account. ✨',planKeyboard(user),{parse_mode:'HTML'});}
+  if(d==='reward:redeem'||d==='reward:redeem_all'){const all=d==='reward:redeem_all',r=await redeemCoinsForPaid(env,uid,all);if(!r.ok)return sendText(env,chatId,'🪙 You need at least <b>100 Llama Coins</b> to redeem Paid days.',null,{parse_mode:'HTML'});user=await getUser(env,uid);return sendText(env,chatId,`⭐ <b>Reward redeemed!</b>\n\n🪙 Used: <b>${r.spent} coins</b>\n⭐ Added: <b>${r.days} Paid days</b>\n💰 Remaining: <b>${r.remaining} coins</b>`,rewardsKeyboard(user),{parse_mode:'HTML'});}
 
   if(d==='memory:clear'){await clearMemory(env,uid);return editText(env,chatId,mid,'🧩 <b>Your saved personalization memory was cleared.</b>\n\nFull conversation history was never stored.',{inline_keyboard:[[{text:'⬅️ Back',callback_data:'menu:home'}]]},{parse_mode:'HTML'});}
   if(d.startsWith('src:'))return showSources(env,uid,chatId,d.slice(4));
@@ -178,11 +180,11 @@ async function adminCommand(env,msg,text){
 
 export async function registerTelegram(env){
   const adminId=env.ADMIN_CHAT_ID,webhook=`${WORKER_URL}/webhook`,results={};
-  results.webhook=await api(env,'setWebhook',{url:webhook,secret_token:env.TELEGRAM_WEBHOOK_SECRET,allowed_updates:['message','callback_query','pre_checkout_query','subscription'],drop_pending_updates:false});
+  results.webhook=await api(env,'setWebhook',{url:webhook,secret_token:env.TELEGRAM_WEBHOOK_SECRET,allowed_updates:['message','callback_query','pre_checkout_query'],drop_pending_updates:false});
   results.publicCommands=await api(env,'setMyCommands',{commands:PUBLIC_COMMANDS});
   results.name=await api(env,'setMyName',{name:'Llama'}).catch(()=>false);
-  results.short=await api(env,'setMyShortDescription',{short_description:'Personalized AI with web, voice, memory, plans & rewards.'}).catch(()=>false);
-  results.description=await api(env,'setMyDescription',{description:'Llama is a personalized Telegram AI assistant built by Nadeem. Chat, web search, voice, private memory, Free/Paid plans, coupons and invite rewards.'}).catch(()=>false);
+  results.short=await api(env,'setMyShortDescription',{short_description:'Personalized AI with web, voice, images, files, memory & plans.'}).catch(()=>false);
+  results.description=await api(env,'setMyDescription',{description:'Llama is a personalized Telegram AI assistant built by Nadeem. Chat, web search, voice, image and file analysis, private memory, Free/Paid plans, coupons and invite rewards.'}).catch(()=>false);
   if(adminId)results.adminCommands=await api(env,'setMyCommands',{commands:[...PUBLIC_COMMANDS,...ADMIN_COMMANDS],scope:{type:'chat',chat_id:Number(adminId)}});
   return results;
 }
@@ -195,4 +197,4 @@ async function runScheduled(env){
 }
 async function sendBirthdayBatch(env,users,year,llama){for(let i=0;i<users.length;i+=20){const chunk=users.slice(i,i+20);await Promise.allSettled(chunk.map(async u=>{await sendText(env,Number(u.chat_id),llama?llamaBirthdayMessage():birthdayMessage(u),null,{parse_mode:'HTML'});if(llama)await markLlamaBirthdaySent(env,Number(u.user_id),year);else await markBirthdaySent(env,Number(u.user_id),year);}));}}
 
-function statusPage(){return`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Llama v${VERSION}</title><style>body{font-family:system-ui;background:#0b0d12;color:#f5f7fb;display:grid;place-items:center;min-height:100vh;margin:0}.card{width:min(680px,88vw);padding:34px;border:1px solid #252a36;border-radius:24px;background:#121620;box-shadow:0 20px 70px #0008}h1{font-size:42px;margin:0 0 8px}.muted{color:#9da7b8}.ok{color:#7df0a5}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:24px 0}.box{padding:14px;border-radius:16px;background:#181d29}a{color:#88b7ff;text-decoration:none}@media(max-width:560px){.grid{grid-template-columns:1fr}h1{font-size:34px}}</style></head><body><main class="card"><h1>🦙 Llama</h1><div class="muted">Personalized Telegram AI assistant</div><p class="ok">● Online · v${VERSION}</p><div class="grid"><div class="box"><b>Birthday</b><br><span class="muted">March 2, 2026</span></div><div class="box"><b>Plans</b><br><span class="muted">Free + Paid</span></div><div class="box"><b>Paid</b><br><span class="muted">${PAID_STARS} Telegram Stars / 30 days</span></div><div class="box"><b>Privacy</b><br><span class="muted">Full chats not stored</span></div></div><p>Developed by <b>Nadeem</b> · <a href="${GITHUB_URL}">GitHub</a> · <a href="${BOT_URL}">Open bot</a> · <a href="${WORKER_URL}/health">Health</a></p></main></body></html>`;}
+function statusPage(){return`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Llama v${VERSION}</title><style>body{font-family:system-ui;background:#0b0d12;color:#f5f7fb;display:grid;place-items:center;min-height:100vh;margin:0}.card{width:min(680px,88vw);padding:34px;border:1px solid #252a36;border-radius:24px;background:#121620;box-shadow:0 20px 70px #0008}h1{font-size:42px;margin:0 0 8px}.muted{color:#9da7b8}.ok{color:#7df0a5}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:24px 0}.box{padding:14px;border-radius:16px;background:#181d29}a{color:#88b7ff;text-decoration:none}@media(max-width:560px){.grid{grid-template-columns:1fr}h1{font-size:34px}}</style></head><body><main class="card"><h1>🦙 Llama</h1><div class="muted">Personalized Telegram AI assistant</div><p class="ok">● Online · v${VERSION}</p><div class="grid"><div class="box"><b>Birthday</b><br><span class="muted">March 2, 2026</span></div><div class="box"><b>Plans</b><br><span class="muted">Free + Paid</span></div><div class="box"><b>Media</b><br><span class="muted">Images + text/code files</span></div><div class="box"><b>Privacy</b><br><span class="muted">Full chats/files not stored</span></div></div><p>Developed by <b>Nadeem</b> · <a href="${GITHUB_URL}">GitHub</a> · <a href="${BOT_URL}">Open bot</a> · <a href="${WORKER_URL}/health">Health</a></p></main></body></html>`;}
