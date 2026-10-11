@@ -50,7 +50,18 @@ export async function resetProfileSetup(env,uid){await env.DB.prepare("UPDATE us
 export async function completeProfile(env,uid){await env.DB.prepare("UPDATE users SET profile_complete=1,onboarding_step='done' WHERE user_id=?").bind(uid).run();}
 
 export async function addCoins(env,uid,delta,reason='Adjustment',sourceKey=null){delta=Math.trunc(Number(delta)||0);if(!delta)return false;let inserted=true;if(sourceKey){const r=await env.DB.prepare('INSERT OR IGNORE INTO coin_ledger(user_id,delta,reason,source_key) VALUES(?,?,?,?)').bind(uid,delta,reason,sourceKey).run();inserted=Number(r?.meta?.changes||0)>0;}else await env.DB.prepare('INSERT INTO coin_ledger(user_id,delta,reason) VALUES(?,?,?)').bind(uid,delta,reason).run();if(inserted)await env.DB.prepare('UPDATE users SET coins=MAX(0,COALESCE(coins,0)+?) WHERE user_id=?').bind(delta,uid).run();return inserted;}
-export async function redeemCoinsForPaid(env,uid){const r=await env.DB.prepare('UPDATE users SET coins=coins-? WHERE user_id=? AND coins>=?').bind(REWARD_COST,uid,REWARD_COST).run();if(Number(r?.meta?.changes||0)<1)return{ok:false,reason:'coins'};await env.DB.prepare('INSERT INTO coin_ledger(user_id,delta,reason,source_key) VALUES(?,?,?,?)').bind(uid,-REWARD_COST,`${REWARD_DAYS} Paid days redemption`,`reward:${uid}:${Date.now()}`).run();await grantPaidDays(env,uid,REWARD_DAYS,'reward');return{ok:true};}
+export async function redeemCoinsForPaid(env,uid,all=false){
+  const row=await env.DB.prepare('SELECT COALESCE(coins,0) coins FROM users WHERE user_id=?').bind(uid).first();
+  const balance=Math.max(0,Math.trunc(Number(row?.coins)||0)),available=Math.floor(balance/REWARD_COST),units=all?available:Math.min(1,available);
+  if(units<1)return{ok:false,reason:'coins',remaining:balance};
+  const spent=units*REWARD_COST,days=units*REWARD_DAYS;
+  const r=await env.DB.prepare('UPDATE users SET coins=coins-? WHERE user_id=? AND coins>=?').bind(spent,uid,spent).run();
+  if(Number(r?.meta?.changes||0)<1)return{ok:false,reason:'race'};
+  await env.DB.prepare('INSERT INTO coin_ledger(user_id,delta,reason,source_key) VALUES(?,?,?,?)').bind(uid,-spent,`${days} Paid days redemption`,`reward:${uid}:${Date.now()}:${units}`).run();
+  await grantPaidDays(env,uid,days,'reward');
+  const fresh=await env.DB.prepare('SELECT COALESCE(coins,0) coins FROM users WHERE user_id=?').bind(uid).first();
+  return{ok:true,units,spent,days,remaining:Number(fresh?.coins)||0};
+}
 
 export async function grantPaidDays(env,uid,days,source='manual',chargeId=null){days=Math.max(1,Math.min(3650,Math.trunc(Number(days)||0)));const mod=`+${days} days`;await env.DB.prepare(`UPDATE users SET plan='paid',paid_until=datetime(CASE WHEN paid_until IS NOT NULL AND datetime(paid_until)>CURRENT_TIMESTAMP THEN paid_until ELSE CURRENT_TIMESTAMP END,?),plan_source=?,subscription_charge_id=COALESCE(?,subscription_charge_id) WHERE user_id=?`).bind(mod,source,chargeId,uid).run();}
 export async function setPaidUntilUnix(env,uid,unix,source='stars',chargeId=null,autoRenew=1){const sql=utcSqlFromUnix(unix);await env.DB.prepare(`UPDATE users SET plan='paid',paid_until=CASE WHEN paid_until IS NOT NULL AND datetime(paid_until)>datetime(?) THEN paid_until ELSE ? END,plan_source=?,subscription_charge_id=?,subscription_auto_renew=? WHERE user_id=?`).bind(sql,sql,source,chargeId,autoRenew?1:0,uid).run();}
