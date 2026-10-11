@@ -1,6 +1,6 @@
 # Llama Telegram AI Bot
 
-**Llama v2.2.0** is a personalized Telegram AI assistant developed by **Nadeem**. It runs on Cloudflare Workers with D1 persistence, live web search, voice input/output, private personalization memory, referrals, Free/Paid plans, Telegram Stars subscriptions, coupons, and Llama Coin rewards.
+**Llama v2.3.0** is a personalized Telegram AI assistant developed by **Nadeem**. It runs on Cloudflare Workers with D1 persistence, live web search, voice input/output, image and text/code file analysis, private personalization memory, referrals, Free/Paid plans, Telegram Stars subscriptions, coupons, and Llama Coin rewards.
 
 Developer: https://github.com/nadeemmhdm
 
@@ -8,27 +8,57 @@ Developer: https://github.com/nadeemmhdm
 
 - Llama birthday: **March 2, 2026**
 - First-time onboarding: preferred name, optional gender, optional DOB, and position
-- Personalized responses using profile fields and durable non-sensitive memory
+- Profile fields are injected as authoritative context for personalized replies
+- Live current date, weekday and time context in **Asia/Kolkata**
 - Automatic birthday wishes at **00:00 Asia/Kolkata**
+- Image analysis for Telegram photos and JPG/PNG/WebP documents
+- Direct analysis for TXT, Markdown, JSON, CSV, logs and common source-code/text formats
+- Uploaded file bytes are processed transiently; no R2/KV/file-storage copy is created
 - Free and Paid monthly plans
 - Free users use **Llama Fast** only
 - Paid unlocks Llama Smart, Llama Reasoning, higher monthly limits, and voice selection
 - Telegram Stars recurring subscription checkout: **99 XTR / 30 days**
 - Referral rewards with separate in-bot **Llama Coins**
-- 100 Llama Coins can redeem 7 Paid days
+- 100 Llama Coins can redeem 7 Paid days, with an optional **Redeem All** action for multiple full 100-coin blocks
 - Coupon codes can grant Paid days and/or bonus Llama Coins with zero payment
 - Voice selection: Luna, Asteria, Orion, Athena, Arcas
 - Telegram voice-note understanding and optional Text + Voice replies
 - Web search with sources hidden behind a Sources button
+- Context-aware animated thinking messages
 - 2–4 contextual suggested follow-up buttons
 - Sticker and emoji understanding from Telegram metadata
 - Context-aware Telegram message reactions
 - Public GitHub context for developer/project questions
 - Owner-only user search, subscription, coupon, coin, messaging and account controls
 
+## Image and file analysis
+
+Users can send a Telegram photo or supported document directly. A caption can be used as the analysis instruction, for example:
+
+```text
+Find the error in this screenshot
+Summarize this JSON file
+Explain this Python code
+Check this CSV structure
+```
+
+Supported image formats currently include JPG/JPEG, PNG and WebP.
+
+Supported textual files include TXT, Markdown, JSON/JSONL, CSV/TSV, JavaScript/TypeScript, Python, Java, C/C++, C#, Go, Rust, PHP, Ruby, Swift, Kotlin, HTML/CSS, XML, YAML, TOML, INI/config files, logs, SQL, shell/PowerShell/batch files and similar UTF-8 text formats.
+
+Direct file-analysis limit is **8 MB**. Very large textual files are capped to the first 70,000 characters for model context, and the model is explicitly told when content was truncated.
+
+PDF, DOCX, XLSX and PPTX are not directly parsed by the current lightweight no-extra-storage media path.
+
+### Storage behavior
+
+Llama does not create a persistent copy of uploaded Telegram images or files. The Worker obtains the file from Telegram for the current request, processes it in memory, and discards the request bytes after execution. D1 does not store uploaded file bodies.
+
+Image analysis uses the Workers AI allocation bound to the Worker. Text/code file analysis uses the normal Llama chat path after transient text extraction.
+
 ## Privacy model
 
-Llama does **not** persist full user conversations or AI answers in D1.
+Llama does **not** persist full user conversations, AI answers, or uploaded file bodies in D1.
 
 Persistent data is limited to operational/account data such as:
 
@@ -42,7 +72,7 @@ Persistent data is limited to operational/account data such as:
 - Telegram Stars transaction identifiers/status required for subscription management
 - short-lived source/suggestion action metadata
 
-Normal memory lookups are scoped by Telegram user ID.
+Normal memory lookups are scoped by Telegram user ID. Media/file prompts use `skipMemory` so file contents are not extracted into durable personalization memory.
 
 ## Plans
 
@@ -74,7 +104,7 @@ A valid referral gives:
 - inviter: +25 Llama Coins
 - invited user: +10 Llama Coins
 
-100 Llama Coins can be exchanged for 7 Paid days. Llama Coins are internal bot rewards and are **not Telegram Stars**.
+100 Llama Coins can be exchanged for 7 Paid days. If multiple full 100-coin blocks are available, **Redeem All** exchanges all complete blocks in one atomic redemption and leaves the remainder. Llama Coins are internal bot rewards and are **not Telegram Stars**.
 
 ## User commands
 
@@ -95,6 +125,8 @@ A valid referral gives:
 /help       Help
 /ping       Service status
 ```
+
+Images/files do not require a command: simply send the photo/document, optionally with a caption describing what Llama should do.
 
 ## Birthday scheduler
 
@@ -130,6 +162,9 @@ Telegram
    v
 Cloudflare Worker
    |-- Llama chat + web search
+   |-- transient Telegram image/file download
+   |-- image understanding via Workers AI
+   |-- text/code file decoding + Llama analysis
    |-- Telegram Stars subscription flow
    |-- scheduled birthday job
    |-- Workers AI speech-to-text / text-to-speech
@@ -147,11 +182,12 @@ Cloudflare Worker
 ## Repository structure
 
 ```text
-src/index.js      Telegram router, onboarding, plans, payments, scheduler
+src/index.js      Telegram router, onboarding, media routing, plans, payments, scheduler
 src/config.js     UI, plan/model/voice constants and keyboards
-src/telegram.js   Telegram API, reactions, formatting and voice transport
+src/telegram.js   Telegram API, generic file download, reactions, formatting and voice transport
 src/db.js         D1 account, profile, quota, reward and subscription storage
-src/ai.js         AI replies, search, memory extraction, quotas and voice
+src/ai.js         AI replies, live IST/profile grounding, search, memory, quotas and voice
+src/media.js      transient image and text/code file analysis
 schema.sql        D1 schema
 wrangler.jsonc    Worker bindings and midnight-IST cron
 ```
@@ -183,4 +219,6 @@ https://t.me/llamaaiofficial_bot
 - per-user memory/action ownership checks
 - successful-payment payload and amount validation before Paid activation
 - coupon caps, expiration, one-redemption-per-user protection
+- uploaded file bytes are not persisted to D1/R2/KV
+- file/image analysis is size-limited and request-scoped
 - no full conversation or AI answer persistence in D1
