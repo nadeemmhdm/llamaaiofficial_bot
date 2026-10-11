@@ -4,9 +4,11 @@ export const GEMINI_MODEL='gemini-3.8-flash';
 export const GEMINI_TTS_MODEL='gemini-3.8-flash-lite-tts';
 export const GEMINI_VOICE_MAP={luna:'Sulafat',asteria:'Aoede',orion:'Orus',athena:'Kore',arcas:'Achird'};
 
-export const hasGemini=env=>!!env.GEMINI_API_KEY;
+let geminiDeniedUntil=0;
+export const hasGemini=env=>!!env.GEMINI_API_KEY&&Date.now()>=geminiDeniedUntil;
 export function isGeminiQuotaError(e){const s=String(e?.message||e||'').toLowerCase();return s.includes('gemini 429')||s.includes('resource_exhausted')||(s.includes('quota')&&s.includes('gemini'));}
 export function isGeminiBusyError(e){const s=String(e?.message||e||'').toLowerCase();return s.includes('gemini 503')||(s.includes('unavailable')&&s.includes('gemini'));}
+export function isGeminiAccessDenied(e){const s=String(e?.message||e||'').toLowerCase();return s.includes('gemini 403')||s.includes('denied access')||s.includes('permission_denied')||s.includes('permission denied');}
 
 function bytesToBase64(bytes){let bin='';for(let i=0;i<bytes.length;i+=0x8000)bin+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(bin);}
 function base64ToBytes(s){const bin=atob(String(s||'').replace(/^data:[^,]+,/,'')),out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out;}
@@ -17,7 +19,11 @@ async function geminiCall(env,model,body,ms=90000){
     method:'POST',headers:{'x-goog-api-key':env.GEMINI_API_KEY,'Content-Type':'application/json'},body:JSON.stringify(body)
   },ms);
   const txt=await r.text();let j=null;try{j=JSON.parse(txt);}catch{}
-  if(!r.ok)throw new Error(`Gemini ${r.status}: ${String(j?.error?.message||txt||'request failed').slice(0,500)}`);
+  if(!r.ok){
+    const err=new Error(`Gemini ${r.status}: ${String(j?.error?.message||txt||'request failed').slice(0,500)}`);
+    if(r.status===403)geminiDeniedUntil=Date.now()+5*60*1000;
+    throw err;
+  }
   return j||{};
 }
 function geminiText(j){const parts=j?.candidates?.[0]?.content?.parts||[];return parts.map(p=>typeof p?.text==='string'?p.text:'').filter(Boolean).join('\n').trim();}
